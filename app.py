@@ -3,7 +3,7 @@ import google.generativeai as genai
 import time
 import os
 from pytube import YouTube
-from pytube.exceptions import HTTPError
+from urllib.error import HTTPError # CORRECTED IMPORT
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -108,9 +108,9 @@ def analyze_youtube_video(api_key, video_url):
         
         progress_bar.progress(100, text="Analysis complete!")
 
-    # --- UPDATED ERROR HANDLING ---
+    # --- ERROR HANDLING BLOCK (No changes needed here) ---
     except HTTPError as e:
-        if e.status_code == 429:
+        if e.code == 429:
             st.session_state.error_message = ("**YouTube Rate Limit Exceeded (HTTP 429)**. The Streamlit server is making too many requests to YouTube. Please wait a few minutes and try again, or try a different video URL.")
         else:
             st.session_state.error_message = f"A YouTube-related error occurred: {str(e)}"
@@ -149,3 +149,4 @@ if st.session_state.analysis_result:
 else:
     if not st.session_state.is_processing:
         st.info("Enter a YouTube URL and click 'Analyze Video' to see a strategic breakdown.")
+
