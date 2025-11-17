@@ -3,7 +3,7 @@ import google.generativeai as genai
 import time
 import os
 from pytube import YouTube
-from urllib.error import HTTPError # CORRECTED IMPORT
+from urllib.error import HTTPError
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -43,20 +43,17 @@ def analyze_youtube_video(api_key, video_url):
     st.session_state.analysis_result = None
     st.session_state.error_message = ''
     progress_bar = st.progress(0, text="Analysis initiated...")
-    audio_filepath = None # Define to ensure it exists for the finally block
+    audio_filepath = None
     
     try:
-        # 1. Download YouTube Audio
         progress_bar.progress(5, text="Connecting to YouTube...")
         yt = YouTube(video_url)
         audio_stream = yt.streams.filter(only_audio=True).first()
         progress_bar.progress(10, text=f"Downloading audio for '{yt.title}'...")
         audio_filepath = audio_stream.download(filename='temp_audio.mp4')
         
-        # 2. Configure Gemini API
         genai.configure(api_key=api_key)
         
-        # 3. Upload Audio to Gemini
         progress_bar.progress(25, text="Uploading audio to Google AI Studio...")
         uploaded_file = genai.upload_file(
             path=audio_filepath,
@@ -64,7 +61,6 @@ def analyze_youtube_video(api_key, video_url):
             mime_type="audio/mp4"
         )
         
-        # 4. Poll for Processing
         progress_bar.progress(50, text="File uploaded. Processing audio...")
         while uploaded_file.state.name == "PROCESSING":
             time.sleep(5)
@@ -73,34 +69,32 @@ def analyze_youtube_video(api_key, video_url):
         if uploaded_file.state.name == "FAILED":
             raise Exception("Video processing failed in Google AI Studio. The file may be corrupt or in an unsupported format.")
 
-        # 5. Generate Analysis
         progress_bar.progress(75, text="Audio processed. Analyzing with Gemini 1.5 Pro...")
         model = genai.GenerativeModel(model_name="gemini-1.5-pro")
         
         prompt = f"""
         You are a world-class YouTube strategy consultant. Your task is to analyze the provided audio from the YouTube video titled "{yt.title}". 
         Based on the transcript, which you will infer from the audio, perform a comprehensive analysis of its core components.
-
-        Provide a detailed, structured, and actionable critique in Markdown format. Address the following sections:
-
+        Provide a detailed, structured, and actionable critique in Markdown format.
+        
         ### Hook Analysis (First 15-30 Seconds)
         - **Effectiveness Score (1-10):**
-        - **Critique:** Does the hook grab attention? Does it use intrigue, a bold promise, or a pattern interrupt? Is it clear who the video is for and what problem it solves?
-        - **Suggestion:** How could the hook be made more compelling to reduce audience drop-off?
+        - **Critique:** Does the hook grab attention? Is it clear who the video is for and what problem it solves?
+        - **Suggestion:** How could the hook be made more compelling?
 
         ### Core Content & Structure
-        - **Clarity of Message:** Is the video's central promise or topic clear and well-delivered?
-        - **Pacing & Engagement:** Does the video maintain momentum? Are there any parts that drag? Does it use storytelling, examples, or pattern interrupts to keep the viewer engaged?
-        - **Value Delivery:** Does the content deliver on the hook's promise? Is the information valuable, educational, or entertaining?
+        - **Clarity of Message:** Is the video's central promise clear and well-delivered?
+        - **Pacing & Engagement:** Does the video maintain momentum? Does it use storytelling or examples?
+        - **Value Delivery:** Does the content deliver on the hook's promise?
 
         ### Call to Action (CTA)
-        - **Clarity & Strength:** Is there a clear CTA? Is it compelling? Does it tell the viewer exactly what to do and why they should do it (e.g., subscribe, watch another video, download a resource)?
-        - **Placement:** Is the CTA placed effectively within the video (e.g., mid-roll, end-screen)?
-        - **Suggestion:** How could the CTA be improved to increase conversion?
+        - **Clarity & Strength:** Is there a clear CTA? Is it compelling and easy to follow?
+        - **Placement:** Is the CTA placed effectively?
+        - **Suggestion:** How could the CTA be improved?
 
         ### Overall Summary & Strategic Recommendations
         - Provide a final summary of the video's strengths and weaknesses.
-        - List the top 3 most impactful, actionable recommendations for the creator to improve their next video.
+        - List the top 3 most impactful, actionable recommendations for the creator.
         """
         
         response = model.generate_content([prompt, uploaded_file], request_options={"timeout": 600})
@@ -108,10 +102,9 @@ def analyze_youtube_video(api_key, video_url):
         
         progress_bar.progress(100, text="Analysis complete!")
 
-    # --- ERROR HANDLING BLOCK (No changes needed here) ---
     except HTTPError as e:
         if e.code == 429:
-            st.session_state.error_message = ("**YouTube Rate Limit Exceeded (HTTP 429)**. The Streamlit server is making too many requests to YouTube. Please wait a few minutes and try again, or try a different video URL.")
+            st.session_state.error_message = ("**YouTube Rate Limit Exceeded (HTTP 429)**. The Streamlit server is making too many requests to YouTube. Please wait a few minutes and try again.")
         else:
             st.session_state.error_message = f"A YouTube-related error occurred: {str(e)}"
     except Exception as e:
@@ -136,9 +129,16 @@ with st.sidebar:
     if not is_api_key_valid:
         st.warning("Please enter a valid Google AI API Key to enable analysis.")
 
+# --- Main Content Logic ---
+
+# **THIS IS THE CORRECTED/RE-ADDED BLOCK THAT TRIGGERS THE ANALYSIS**
+if analyze_button:
+    analyze_youtube_video(st.session_state.api_key, video_url)
+
 st.header("📊 Analysis Results")
 
 if st.session_state.is_processing:
+    # The progress bar is now inside the function, so this is just a fallback.
     st.info("Analysis is in progress. Depending on the video length, this can take a few minutes...")
 
 if st.session_state.error_message:
@@ -149,4 +149,3 @@ if st.session_state.analysis_result:
 else:
     if not st.session_state.is_processing:
         st.info("Enter a YouTube URL and click 'Analyze Video' to see a strategic breakdown.")
-
