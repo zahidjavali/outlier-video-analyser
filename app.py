@@ -1,12 +1,13 @@
 import streamlit as st
 import google.generativeai as genai
 import time
-import json
+import os
+from pytube import YouTube
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Outlier Video Analysis",
-    page_icon="🎬",
+    page_title="YouTube Script & Strategy Analyzer",
+    page_icon="📈",
     layout="wide"
 )
 
@@ -16,29 +17,14 @@ st.markdown("""
     .stApp {
         background-color: #F0F2F6;
     }
-    .stTabs [data-baseweb="tab-list"] {
-		gap: 24px;
-	}
-	.stTabs [data-baseweb="tab"] {
-		height: 50px;
-        white-space: pre-wrap;
-		background-color: #F0F2F6;
-		border-radius: 4px 4px 0px 0px;
-		gap: 1px;
-		padding-top: 10px;
-		padding-bottom: 10px;
+    .stProgress > div > div > div > div {
+        background-color: #1c83e1;
     }
-	.stTabs [aria-selected="true"] {
-  		background-color: #FFFFFF;
-	}
 </style>""", unsafe_allow_html=True)
-
 
 # --- State Management ---
 if 'api_key' not in st.session_state:
     st.session_state.api_key = ''
-if 'video_file' not in st.session_state:
-    st.session_state.video_file = None
 if 'analysis_result' not in st.session_state:
     st.session_state.analysis_result = None
 if 'error_message' not in st.session_state:
@@ -48,69 +34,93 @@ if 'is_processing' not in st.session_state:
 
 # --- Helper Functions ---
 
-def analyze_video(api_key, video_file):
+def analyze_youtube_video(api_key, video_url):
     """
-    Uploads a video file, polls for processing, and generates content using Gemini.
+    Downloads audio from a YouTube URL, uploads it, and generates a strategic analysis.
     """
     st.session_state.is_processing = True
     st.session_state.analysis_result = None
     st.session_state.error_message = ''
+    progress_text = "Analysis in progress. Please wait."
+    progress_bar = st.progress(0, text=progress_text)
     
     try:
+        # 1. Download YouTube Audio
+        progress_bar.progress(5, text="Downloading audio from YouTube...")
+        yt = YouTube(video_url)
+        audio_stream = yt.streams.filter(only_audio=True).first()
+        audio_filepath = audio_stream.download(filename='temp_audio.mp4')
+        
+        # 2. Configure Gemini API
         genai.configure(api_key=api_key)
         
-        # --- File Upload and Processing ---
-        st.info("Uploading your video to Google AI Studio...")
-        progress_bar = st.progress(0, text="Uploading...")
-        
+        # 3. Upload Audio to Gemini
+        progress_bar.progress(25, text=f"Uploading '{yt.title}' to Google AI Studio...")
         uploaded_file = genai.upload_file(
-            path=video_file.name,
-            display_name=video_file.name,
-            mime_type=video_file.type
+            path=audio_filepath,
+            display_name=yt.title,
+            mime_type="audio/mp4"
         )
-        progress_bar.progress(25, text=f"File '{uploaded_file.display_name}' uploaded. Processing...")
-
-        # Poll for active state
+        
+        # 4. Poll for Processing
+        progress_bar.progress(50, text="File uploaded. Processing audio...")
         while uploaded_file.state.name == "PROCESSING":
             time.sleep(5)
             uploaded_file = genai.get_file(name=uploaded_file.name)
         
         if uploaded_file.state.name == "FAILED":
-            st.session_state.error_message = "Video processing failed. Please try a different file."
-            st.session_state.is_processing = False
-            return
+            raise Exception("Video processing failed in Google AI Studio.")
 
-        progress_bar.progress(75, text="Video processed successfully. Analyzing with Gemini...")
-
-        # --- Content Generation ---
+        # 5. Generate Analysis
+        progress_bar.progress(75, text="Audio processed. Analyzing with Gemini 1.5 Pro...")
         model = genai.GenerativeModel(model_name="gemini-1.5-pro")
         
-        prompt = """
-        Extract the key events from the video, focusing on outlier moments that deviate from the main activity. 
-        For each event, provide a precise timestamp, a concise description, and classify it as a 'Minor' or 'Major' outlier. 
-        Structure the output as a JSON array of objects, each with 'timestamp', 'description', and 'severity' keys.
+        prompt = f"""
+        You are a world-class YouTube strategy consultant. Your task is to analyze the provided audio from the YouTube video titled "{yt.title}". 
+        Based on the transcript, which you will infer from the audio, perform a comprehensive analysis of its core components.
+
+        Provide a detailed, structured, and actionable critique in Markdown format. Address the following sections:
+
+        ### Hook Analysis (First 15-30 Seconds)
+        - **Effectiveness Score (1-10):**
+        - **Critique:** Does the hook grab attention? Does it use intrigue, a bold promise, or a pattern interrupt? Is it clear who the video is for and what problem it solves?
+        - **Suggestion:** How could the hook be made more compelling to reduce audience drop-off?
+
+        ### Core Content & Structure
+        - **Clarity of Message:** Is the video's central promise or topic clear and well-delivered?
+        - **Pacing & Engagement:** Does the video maintain momentum? Are there any parts that drag? Does it use storytelling, examples, or pattern interrupts to keep the viewer engaged?
+        - **Value Delivery:** Does the content deliver on the hook's promise? Is the information valuable, educational, or entertaining?
+
+        ### Call to Action (CTA)
+        - **Clarity & Strength:** Is there a clear CTA? Is it compelling? Does it tell the viewer exactly what to do and why they should do it (e.g., subscribe, watch another video, download a resource)?
+        - **Placement:** Is the CTA placed effectively within the video (e.g., mid-roll, end-screen)?
+        - **Suggestion:** How could the CTA be improved to increase conversion?
+
+        ### Overall Summary & Strategic Recommendations
+        - Provide a final summary of the video's strengths and weaknesses.
+        - List the top 3 most impactful, actionable recommendations for the creator to improve their next video.
         """
         
         response = model.generate_content([prompt, uploaded_file], request_options={"timeout": 600})
-        
-        # Clean up the response to extract valid JSON
-        cleaned_response = response.text.strip().replace("``````", "")
-        st.session_state.analysis_result = json.loads(cleaned_response)
+        st.session_state.analysis_result = response.text
         
         progress_bar.progress(100, text="Analysis complete!")
+        # Clean up the downloaded audio file
+        os.remove(audio_filepath)
 
     except Exception as e:
         st.session_state.error_message = f"An error occurred: {str(e)}"
     finally:
         st.session_state.is_processing = False
-
+        if 'audio_filepath' in locals() and os.path.exists(audio_filepath):
+             os.remove(audio_filepath)
 
 # --- UI Layout ---
 
 # --- Sidebar ---
 with st.sidebar:
-    st.title("🎬 Outlier Video Analysis")
-    st.markdown("This app uses the Gemini 1.5 Pro model to identify and classify outlier events in a video file.")
+    st.title("📈 YouTube Script Analyzer")
+    st.markdown("Use Gemini 1.5 Pro to analyze a YouTube video's script, hook, structure, and CTA, just by providing a URL.")
     
     st.session_state.api_key = st.text_input(
         "Enter your Google AI API Key", 
@@ -118,72 +128,34 @@ with st.sidebar:
         value=st.session_state.api_key
     )
     
-    # Simple check for API key format
+    video_url = st.text_input("Enter YouTube Video URL")
+
     is_api_key_valid = st.session_state.api_key.startswith("AIza") and len(st.session_state.api_key) > 30
-
-    uploaded_video = st.file_uploader(
-        "Upload a video file",
-        type=["mp4", "mov", "avi", "mkv"],
-        disabled=not is_api_key_valid
-    )
-
-    if not is_api_key_valid:
-        st.warning("Please enter a valid Google AI API Key to enable file uploads.")
 
     analyze_button = st.button(
         "Analyze Video", 
-        disabled=not uploaded_video or st.session_state.is_processing or not is_api_key_valid,
+        disabled=not video_url or st.session_state.is_processing or not is_api_key_valid,
         use_container_width=True
     )
     
+    if not is_api_key_valid:
+        st.warning("Please enter a valid Google AI API Key to enable analysis.")
+
 # --- Main Content ---
-if analyze_button and uploaded_video:
-    # Save the uploaded file temporarily to pass its path
-    with open(uploaded_video.name, "wb") as f:
-        f.write(uploaded_video.getbuffer())
-    analyze_video(st.session_state.api_key, uploaded_video)
+if analyze_button and video_url:
+    analyze_youtube_video(st.session_state.api_key, video_url)
 
+st.header("📊 Analysis Results")
 
-# --- Display Results ---
 if st.session_state.is_processing:
-    st.info("Analysis is in progress. This may take a few minutes...")
+    st.info("Analysis is in progress. Depending on the video length, this can take a few minutes...")
 
 if st.session_state.error_message:
-    st.error(st.session_state.error_message)
+    st.error(f"**Analysis Failed:** {st.session_state.error_message}")
 
 if st.session_state.analysis_result:
-    st.success("Analysis Complete!")
-    
-    major_outliers = [item for item in st.session_state.analysis_result if item.get('severity') == 'Major']
-    minor_outliers = [item for item in st.session_state.analysis_result if item.get('severity') == 'Minor']
-
-    tab1, tab2, tab3 = st.tabs(["**Major Outliers**", "**Minor Outliers**", "**Raw JSON**"])
-
-    with tab1:
-        st.subheader(f"Found {len(major_outliers)} Major Outliers")
-        if not major_outliers:
-            st.info("No major outliers were detected in the video.")
-        else:
-            for item in major_outliers:
-                st.markdown(f"**Timestamp:** `{item.get('timestamp', 'N/A')}`")
-                st.markdown(f"**Description:** {item.get('description', 'No description provided.')}")
-                st.divider()
-
-    with tab2:
-        st.subheader(f"Found {len(minor_outliers)} Minor Outliers")
-        if not minor_outliers:
-            st.info("No minor outliers were detected in the video.")
-        else:
-            for item in minor_outliers:
-                st.markdown(f"**Timestamp:** `{item.get('timestamp', 'N/A')}`")
-                st.markdown(f"**Description:** {item.get('description', 'No description provided.')}")
-                st.divider()
-
-    with tab3:
-        st.subheader("Raw JSON Output from Gemini")
-        st.json(st.session_state.analysis_result)
-        
+    st.markdown(st.session_state.analysis_result)
 else:
     if not st.session_state.is_processing:
-        st.info("Upload a video and click 'Analyze Video' to begin.")
+        st.info("Enter a YouTube URL and click 'Analyze Video' to see a strategic breakdown.")
 
