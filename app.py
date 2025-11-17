@@ -3,6 +3,7 @@ import google.generativeai as genai
 import time
 import os
 from pytube import YouTube
+from pytube.exceptions import HTTPError
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -41,21 +42,22 @@ def analyze_youtube_video(api_key, video_url):
     st.session_state.is_processing = True
     st.session_state.analysis_result = None
     st.session_state.error_message = ''
-    progress_text = "Analysis in progress. Please wait."
-    progress_bar = st.progress(0, text=progress_text)
+    progress_bar = st.progress(0, text="Analysis initiated...")
+    audio_filepath = None # Define to ensure it exists for the finally block
     
     try:
         # 1. Download YouTube Audio
-        progress_bar.progress(5, text="Downloading audio from YouTube...")
+        progress_bar.progress(5, text="Connecting to YouTube...")
         yt = YouTube(video_url)
         audio_stream = yt.streams.filter(only_audio=True).first()
+        progress_bar.progress(10, text=f"Downloading audio for '{yt.title}'...")
         audio_filepath = audio_stream.download(filename='temp_audio.mp4')
         
         # 2. Configure Gemini API
         genai.configure(api_key=api_key)
         
         # 3. Upload Audio to Gemini
-        progress_bar.progress(25, text=f"Uploading '{yt.title}' to Google AI Studio...")
+        progress_bar.progress(25, text="Uploading audio to Google AI Studio...")
         uploaded_file = genai.upload_file(
             path=audio_filepath,
             display_name=yt.title,
@@ -69,7 +71,7 @@ def analyze_youtube_video(api_key, video_url):
             uploaded_file = genai.get_file(name=uploaded_file.name)
         
         if uploaded_file.state.name == "FAILED":
-            raise Exception("Video processing failed in Google AI Studio.")
+            raise Exception("Video processing failed in Google AI Studio. The file may be corrupt or in an unsupported format.")
 
         # 5. Generate Analysis
         progress_bar.progress(75, text="Audio processed. Analyzing with Gemini 1.5 Pro...")
@@ -105,45 +107,34 @@ def analyze_youtube_video(api_key, video_url):
         st.session_state.analysis_result = response.text
         
         progress_bar.progress(100, text="Analysis complete!")
-        # Clean up the downloaded audio file
-        os.remove(audio_filepath)
 
+    # --- UPDATED ERROR HANDLING ---
+    except HTTPError as e:
+        if e.status_code == 429:
+            st.session_state.error_message = ("**YouTube Rate Limit Exceeded (HTTP 429)**. The Streamlit server is making too many requests to YouTube. Please wait a few minutes and try again, or try a different video URL.")
+        else:
+            st.session_state.error_message = f"A YouTube-related error occurred: {str(e)}"
     except Exception as e:
-        st.session_state.error_message = f"An error occurred: {str(e)}"
+        st.session_state.error_message = f"An unexpected error occurred: {str(e)}"
     finally:
         st.session_state.is_processing = False
-        if 'audio_filepath' in locals() and os.path.exists(audio_filepath):
+        if audio_filepath and os.path.exists(audio_filepath):
              os.remove(audio_filepath)
 
 # --- UI Layout ---
-
-# --- Sidebar ---
 with st.sidebar:
     st.title("📈 YouTube Script Analyzer")
     st.markdown("Use Gemini 1.5 Pro to analyze a YouTube video's script, hook, structure, and CTA, just by providing a URL.")
     
-    st.session_state.api_key = st.text_input(
-        "Enter your Google AI API Key", 
-        type="password", 
-        value=st.session_state.api_key
-    )
-    
+    st.session_state.api_key = st.text_input("Enter your Google AI API Key", type="password", value=st.session_state.api_key)
     video_url = st.text_input("Enter YouTube Video URL")
 
     is_api_key_valid = st.session_state.api_key.startswith("AIza") and len(st.session_state.api_key) > 30
 
-    analyze_button = st.button(
-        "Analyze Video", 
-        disabled=not video_url or st.session_state.is_processing or not is_api_key_valid,
-        use_container_width=True
-    )
+    analyze_button = st.button("Analyze Video", disabled=not video_url or st.session_state.is_processing or not is_api_key_valid, use_container_width=True)
     
     if not is_api_key_valid:
         st.warning("Please enter a valid Google AI API Key to enable analysis.")
-
-# --- Main Content ---
-if analyze_button and video_url:
-    analyze_youtube_video(st.session_state.api_key, video_url)
 
 st.header("📊 Analysis Results")
 
@@ -151,11 +142,10 @@ if st.session_state.is_processing:
     st.info("Analysis is in progress. Depending on the video length, this can take a few minutes...")
 
 if st.session_state.error_message:
-    st.error(f"**Analysis Failed:** {st.session_state.error_message}")
+    st.error(st.session_state.error_message)
 
 if st.session_state.analysis_result:
     st.markdown(st.session_state.analysis_result)
 else:
     if not st.session_state.is_processing:
         st.info("Enter a YouTube URL and click 'Analyze Video' to see a strategic breakdown.")
-
